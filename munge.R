@@ -6,10 +6,16 @@ library(readxl)
 library(sf)
 
 #set working directory
-setwd("R:/Project/chi-neighborhood-change/analysis")
+setwd("R:/Project/chi-neighborhood-change/gang-nc-analysis")
 
 #load table of unique gang names by race/eth
 unique_gangs <- read_xlsx("./input/unique_gangs.xlsx")
+
+#load table of 2000 decennial blockgroup estimates
+
+#load table of 2010 decennial/2006-2010 ACS blockgroup estimates
+
+#load table of 2013-2017 ACS blockgroup
 
 #load 2010 blkgrp shapefile for Illinois
 blkgrp <- read_sf(dsn = "./input/2010 Blockgroup Polygon/IL_blck_grp_2010.shp", 
@@ -84,6 +90,8 @@ t1 <- left_join(blkgrp, sets04)
 t2 <- left_join(blkgrp, sets10)
 t3 <- left_join(blkgrp, sets18)
 
+#append sociodemographic indicators for each period
+
 #make time period indicator consistent across blkgrps regardless of prev
 t1 <- t1 %>% mutate(YEAR = "2004")
 t2 <- t2 %>% mutate(YEAR = "2010")
@@ -122,3 +130,4 @@ panel %>%
   ungroup %>%
   select(gang_present) %>%
   plot()
+
