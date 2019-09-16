@@ -47,6 +47,15 @@ blkgrp <- st_join(blkgrp, place, left = FALSE)
 
 #### A. Munge sf objects to proper naming convention and structure for panel ----
 
+#assign coords for cbd center based on Chicago City Hall
+cbd_coord <- st_as_sf(data.frame(x = -87.631475, y = 41.884023),
+                      coords = c("x", "y"))
+cbd_coord <- st_set_crs(cbd_coord, value = 4326)
+cbd_coord <- st_transform(cbd_coord, st_crs(blkgrp))
+
+#compute each blkgrp's Euclidean distance from CBD
+blkgrp$dist_to_cbd <- st_distance(st_centroid(blkgrp$geometry), cbd_coord)[,1]
+
 #function to take cpd sf, reproject, figure out if blkgrp intersected cpd and 
 #adjudicate instances where blkgrp has two+ zones based on area and counts
 cpd_joiner <- function(cpd_sf){
@@ -73,11 +82,11 @@ cpd_joiner <- function(cpd_sf){
   cpd_tmp <- cpd_tmp %>%
     filter(!is.na(GANG_NAME)) %>%
     mutate(YEAR = paste0("20", name),
-           AREA = st_area(geometry)) %>%
+           set_area = st_area(geometry)) %>%
     st_drop_geometry() %>%
-    select(GEOID10, YEAR, GANG_NAME, AREA) %>%
+    select(GEOID10, YEAR, GANG_NAME, set_area) %>%
     group_by(GEOID10, YEAR) %>%
-    summarize(main = GANG_NAME[which(AREA == max(AREA))],
+    summarize(main = GANG_NAME[which(set_area == max(set_area))],
               list = list(GANG_NAME),
               count = length(unique(GANG_NAME)))
     
@@ -150,48 +159,47 @@ panel <- panel %>%
          gang_present = count > 0) %>% 
   arrange(GISJOIN, YEAR) %>%
   group_by(GISJOIN) %>%
-  mutate(newly_present = gang_present & !lag(gang_present),
-         newly_absent = !gang_present & lag(gang_present),
-         still_present = gang_present & lag(gang_present),
-         still_absent = !gang_present & !lag(gang_present))
+  mutate(newly_present = ifelse(YEAR == 2010, gang_present & !lag(gang_present),
+                                ifelse(YEAR == 2017, gang_present & !lag(gang_present, 2),
+                                       NA)),
+         newly_absent = ifelse(YEAR == 2010, !gang_present & lag(gang_present),
+                                ifelse(YEAR == 2017, !gang_present & lag(gang_present, 2),
+                                       NA))) %>%
+  select(GISJOIN, GEOID10, YEAR, everything())
 
 #add some composition measures
 panel <- panel %>%
-  mutate(pct_nh_wht = tot_nh_wht/tot_pop,
-         pct_nh_blk = tot_nh_blk/tot_pop,
-         pct_nh_api = tot_nh_api/tot_pop,
-         pct_hsp = tot_hsp/tot_pop,
-         pct_own_occ = tot_own_occ_hu/tot_hu)
+  mutate(pct_nh_wht = (tot_nh_wht/tot_pop)*100,
+         pct_nh_blk = (tot_nh_blk/tot_pop),
+         pct_nh_oth = ((tot_nh_api+tot_nh_aina+tot_nh_oth)/tot_pop)*100,
+         pct_hsp = (tot_hsp/tot_pop)*100,
+         pct_own_occ = (tot_own_occ_hu/tot_occ_hu)*100,
+         pct_vac = (tot_vac_hu/tot_hu)*100)
 
 #compute change score measures
 panel <- panel %>%
   arrange(GISJOIN, YEAR) %>%
   group_by(GISJOIN) %>%
-  mutate(chg_nh_wht = pct_nh_wht - lag(pct_nh_wht),
-         chg_nh_blk = pct_nh_blk - lag(pct_nh_blk),
-         chg_nh_api = pct_nh_api - lag(pct_nh_api),
-         chg_hsp = pct_hsp - lag(pct_hsp)) %>%
+  mutate(chg_nh_wht = (pct_nh_wht - lag(pct_nh_wht))/(YEAR - lag(YEAR)),
+         chg_nh_blk = (pct_nh_blk - lag(pct_nh_blk))/(YEAR - lag(YEAR)),
+         chg_nh_oth = (pct_nh_oth - lag(pct_nh_oth))/(YEAR - lag(YEAR)),
+         chg_hsp = (pct_hsp - lag(pct_hsp))/(YEAR - lag(YEAR))) %>%
   ungroup() %>%
   filter(YEAR %in% c(2010, 2017))
 
 
 #### C. Descriptive analysis --------------------------------------------------
 
-#correlation of change in race/eth comp with change to new gang presence
-cor.test(as.numeric(panel$newly_present), panel$chg_nh_wht)
-cor.test(as.numeric(panel$newly_present), panel$chg_nh_blk)
-cor.test(as.numeric(panel$newly_present), panel$chg_hsp)
-
-#correlation of change in race/eth comp with change to new gang absence
-cor.test(as.numeric(panel$newly_absent), panel$chg_nh_wht)
-cor.test(as.numeric(panel$newly_absent), panel$chg_nh_blk)
-cor.test(as.numeric(panel$newly_absent), panel$chg_hsp)
-
-#basic choropleths for gang presence in blkgrp; change in % white, % black, % latino
+#choropleth for gang presence in blkgrp
 ggplot(panel, aes(fill = gang_present)) +
   facet_wrap(~ YEAR) +
   geom_sf(lwd = 0.025, color = "grey90")
 
+ggplot(panel, aes(fill = newly_present)) +
+  facet_wrap(~ YEAR) +
+  geom_sf(lwd = 0.025, color = "grey90")
+
+#choropleth for change in % white
 ggplot(panel, aes(fill = chg_nh_wht)) +
   facet_wrap(~ YEAR) +
   geom_sf(lwd = 0.025, color = "grey90")
@@ -204,28 +212,37 @@ ggplot(panel, aes(fill = chg_hsp)) +
   facet_wrap(~ YEAR) +
   geom_sf(lwd = 0.025, color = "grey90")
 
+ggplot(panel, aes(fill = pct_nh_oth)) +
+  facet_wrap(~ YEAR) +
+  geom_sf(lwd = 0.025, color = "grey90")
 
-#blkgrps where gang presence changed between 2004 and 2018
-panel %>% 
-  group_by(GEOID10) %>%
-  filter(gang_present[YEAR==2018] != gang_present[YEAR==2004],
-         YEAR == 2018) %>%
-  distinct(GEOID10) %>%
-  plot()
+#distribution of change in % white
+summary(panel$chg_nh_wht)
 
-#blkgrps where gang presence changed between 2004 and 2018, by current pres
-panel %>% 
-  group_by(GEOID10) %>%
-  filter(gang_present[YEAR==2018] != gang_present[YEAR==2004],
-         YEAR == 2018) %>%
-  ungroup %>%
-  select(gang_present) %>%
-  plot()
+#correlation of change in race/eth comp with change to new gang presence
+cor.test(as.numeric(panel$newly_present), panel$chg_nh_wht)
+cor.test(as.numeric(panel$newly_present), panel$chg_nh_blk)
+cor.test(as.numeric(panel$newly_present), panel$chg_hsp)
+cor.test(as.numeric(panel$newly_present), panel$dist_to_cbd)
+
+#correlation of change in race/eth comp with change to continued gang presence
+cor.test(as.numeric(panel$newly_absent), panel$chg_nh_wht)
+cor.test(as.numeric(panel$newly_absent), panel$chg_nh_blk)
+cor.test(as.numeric(panel$newly_absent), panel$chg_hsp)
+cor.test(as.numeric(panel$newly_absent), panel$dist_to_cbd)
 
 
 #### D. Models ----------------------------------------------------------------
 
-logit_1 <- glm(gang_present ~ tot_pop + pct_nh_wht + pct_nh_blk + pct_hsp +
-                 chg_nh_wht + chg_nh_blk + chg_hsp + pct_own_occ, 
+logit_1 <- glm(newly_present ~ factor(YEAR) + tot_pop + dist_to_cbd +
+                 pct_nh_blk + pct_hsp + pct_nh_oth + 
+                 chg_nh_blk + chg_hsp + chg_nh_oth + pct_own_occ + pct_vac, 
                panel, family = "binomial")
 summary(logit_1)
+
+logit_2 <- glm(newly_absent ~ factor(YEAR) + tot_pop + dist_to_cbd +
+                 pct_nh_blk + pct_hsp + pct_nh_oth + 
+                 chg_nh_blk + chg_hsp + chg_nh_oth + pct_own_occ + pct_vac, 
+               panel, family = "binomial")
+summary(logit_2)
+
